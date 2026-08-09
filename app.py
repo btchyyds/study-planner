@@ -3,6 +3,10 @@ from functools import wraps
 from flask import Flask, request, jsonify, g, send_from_directory, Response
 from flask_cors import CORS
 
+os.environ.setdefault('TZ', 'Asia/Shanghai')
+try: time.tzset()
+except: pass
+
 from werkzeug.security import generate_password_hash, check_password_hash
 from urllib.parse import urlparse
 
