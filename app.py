@@ -74,8 +74,10 @@ def get_db():
         if USE_POSTGRES:
             g.db = DBConn(psycopg2.connect(os.environ['DATABASE_URL']))
         else:
-            raw = sqlite3.connect(DB_PATH)
+            raw = sqlite3.connect(DB_PATH, timeout=30)
             raw.row_factory = sqlite3.Row
+            raw.execute("PRAGMA journal_mode=WAL")
+            raw.execute("PRAGMA busy_timeout=30000")
             raw.execute("PRAGMA foreign_keys=ON")
             g.db = DBConn(raw)
     return g.db
@@ -90,8 +92,10 @@ def init_db():
         raw = psycopg2.connect(os.environ['DATABASE_URL'])
         db = DBConn(raw)
     else:
-        raw = sqlite3.connect(DB_PATH)
+        raw = sqlite3.connect(DB_PATH, timeout=30)
         raw.row_factory = sqlite3.Row
+        raw.execute("PRAGMA journal_mode=WAL")
+        raw.execute("PRAGMA busy_timeout=30000")
         db = DBConn(raw)
     db.executescript("""
     CREATE TABLE IF NOT EXISTS users(
@@ -873,8 +877,10 @@ def reminder_scheduler():
                 raw = psycopg2.connect(os.environ['DATABASE_URL'])
                 db = DBConn(raw)
             else:
-                raw = sqlite3.connect(DB_PATH)
+                raw = sqlite3.connect(DB_PATH, timeout=30)
                 raw.row_factory = sqlite3.Row
+                raw.execute("PRAGMA journal_mode=WAL")
+                raw.execute("PRAGMA busy_timeout=30000")
                 db = DBConn(raw)
             now = datetime.datetime.now()
             today = now.date().isoformat()
