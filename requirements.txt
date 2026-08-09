@@ -1,0 +1,5 @@
+flask>=2.3,<3.0
+flask-cors>=4.0,<5.0
+gunicorn>=21.2,<22.0
+pyjwt>=2.8,<3.0
+werkzeug>=2.3,<4.0

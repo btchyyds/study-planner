@@ -1,0 +1,23 @@
+services:
+  - type: webService
+    name: study-planner
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --preload -w 1 -b 0.0.0.0:$PORT app:app
+    healthCheckPath: /api/health
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: JWT_SECRET
+        sync: false
+      - key: FLASK_ENV
+        value: production
+      - key: DB_PATH
+        value: /var/data/study.db
+      - key: SCHEDULER_INTERVAL_SECONDS
+        value: "60"
+      - key: CORS_ORIGINS
+        sync: false
