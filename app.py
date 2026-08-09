@@ -965,8 +965,10 @@ def index():
 
 init_db()
 
-t = threading.Thread(target=reminder_scheduler, daemon=True)
-t.start()
+IS_PYTHONANYWHERE = 'PYTHONANYWHERE' in os.environ or '.pythonanywhere' in os.environ.get('HOME', '')
+if not IS_PYTHONANYWHERE:
+    t = threading.Thread(target=reminder_scheduler, daemon=True)
+    t.start()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)),

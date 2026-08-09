@@ -649,10 +649,12 @@ clearTimeout(t._timer);t._timer=setTimeout(()=>{t.style.opacity='0'},3000);
 }
 
 // SSE Reminders
-let sseEs=null;
+let sseEs=null,pollTimer=null;
 function startSSE(){
 if(sseEs)sseEs.close();
+if(pollTimer)clearInterval(pollTimer);
 if(!token)return;
+try{
 sseEs=new EventSource('/api/reminders/stream');
 sseEs.addEventListener('reminder',e=>{
 try{
@@ -664,6 +666,29 @@ toast(`🔔 该开始学习了：${d.task_name}`);
 }
 }catch(err){}
 });
+sseEs.onerror=()=>{if(sseEs){sseEs.close();sseEs=null}startPolling()};
+setTimeout(()=>{if(!sseEs||sseEs.readyState===2){startPolling()}},5000);
+}catch(e){startPolling()}
+}
+function startPolling(){
+if(pollTimer)clearInterval(pollTimer);
+pollTimer=setInterval(async()=>{
+try{
+const r=await fetch('/api/tasks/today',{headers:{'Authorization':'Bearer '+token}});
+if(!r.ok)return;
+const d=await r.json();
+const now=new Date();
+const curTime=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+const due=(d.tasks||[]).filter(t=>t.remind_on&&t.remind_time===curTime&&t.status==='incomplete');
+due.forEach(t=>{
+if(Notification&&Notification.permission==='granted'){
+new Notification('学习提醒',{body:`该开始学习了：${t.name}`});
+}else{
+toast(`🔔 该开始学习了：${t.name}`);
+}
+});
+}catch(e){}
+},60000);
 }
 function requestNotifyPerm(){
 if('Notification' in window&&Notification.permission==='default')Notification.requestPermission();
