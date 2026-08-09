@@ -1,9 +1,14 @@
-import sqlite3, jwt, json, time, hashlib, os, datetime, threading, queue, csv, io, sys
+import sqlite3, jwt, json, time, hashlib, os, datetime, threading, queue, csv, io, sys, re
 from functools import wraps
 from flask import Flask, request, jsonify, g, send_from_directory, Response
 from flask_cors import CORS
+
 from werkzeug.security import generate_password_hash, check_password_hash
 from urllib.parse import urlparse
+
+USE_POSTGRES = bool(os.environ.get('DATABASE_URL'))
+if USE_POSTGRES:
+    import psycopg2, psycopg2.extras, psycopg2.sql
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
@@ -27,11 +32,52 @@ def validate_config():
 
 validate_config()
 
+def adapt_sql(sql):
+    if not USE_POSTGRES:
+        return sql
+    s = sql.replace('?', '%s')
+    s = s.replace("datetime('now','localtime')", 'CURRENT_TIMESTAMP')
+    s = s.replace('INTEGER PRIMARY KEY AUTOINCREMENT', 'SERIAL PRIMARY KEY')
+    s = s.replace('BEGIN IMMEDIATE', 'BEGIN')
+    s = re.sub(r'INSERT OR IGNORE INTO (.+)', r'INSERT INTO \1 ON CONFLICT DO NOTHING', s)
+    s = s.replace('INSERT OR REPLACE INTO', 'INSERT INTO')
+    return s
+
+class DBConn:
+    def __init__(self, conn):
+        self.conn = conn
+    def execute(self, sql, params=()):
+        if USE_POSTGRES:
+            sql = adapt_sql(sql)
+            cur = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(sql, params)
+            return cur
+        return self.conn.execute(sql, params)
+    def executescript(self, sql):
+        if USE_POSTGRES:
+            cur = self.conn.cursor()
+            for stmt in sql.split(';'):
+                stmt = stmt.strip()
+                if stmt:
+                    cur.execute(adapt_sql(stmt))
+        else:
+            self.conn.executescript(sql)
+    def commit(self):
+        self.conn.commit()
+    def rollback(self):
+        self.conn.rollback()
+    def close(self):
+        self.conn.close()
+
 def get_db():
     if 'db' not in g:
-        g.db = sqlite3.connect(DB_PATH)
-        g.db.row_factory = sqlite3.Row
-        g.db.execute("PRAGMA foreign_keys=ON")
+        if USE_POSTGRES:
+            g.db = DBConn(psycopg2.connect(os.environ['DATABASE_URL']))
+        else:
+            raw = sqlite3.connect(DB_PATH)
+            raw.row_factory = sqlite3.Row
+            raw.execute("PRAGMA foreign_keys=ON")
+            g.db = DBConn(raw)
     return g.db
 
 @app.teardown_appcontext
@@ -40,7 +86,13 @@ def close_db(exc):
     if db: db.close()
 
 def init_db():
-    db = sqlite3.connect(DB_PATH)
+    if USE_POSTGRES:
+        raw = psycopg2.connect(os.environ['DATABASE_URL'])
+        db = DBConn(raw)
+    else:
+        raw = sqlite3.connect(DB_PATH)
+        raw.row_factory = sqlite3.Row
+        db = DBConn(raw)
     db.executescript("""
     CREATE TABLE IF NOT EXISTS users(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -163,20 +215,20 @@ def init_db():
         ('remind_mode', "ALTER TABLE tasks ADD COLUMN remind_mode TEXT DEFAULT 'notification'"),
         ('target_date', "ALTER TABLE tasks ADD COLUMN target_date TEXT"),
     ]:
-        try: db.execute(ddl)
-        except: pass
-    try: db.execute("ALTER TABLE redeem_history ADD COLUMN item_image TEXT")
-    except: pass
+        try: db.execute(ddl); db.commit()
+        except: db.rollback()
+    try: db.execute("ALTER TABLE redeem_history ADD COLUMN item_image TEXT"); db.commit()
+    except: db.rollback()
     for col, ddl in [
         ('source_task_id', "ALTER TABLE points_log ADD COLUMN source_task_id TEXT"),
         ('source_duration', "ALTER TABLE points_log ADD COLUMN source_duration INTEGER"),
         ('redeem_item_id', "ALTER TABLE points_log ADD COLUMN redeem_item_id TEXT"),
     ]:
-        try: db.execute(ddl)
-        except: pass
+        try: db.execute(ddl); db.commit()
+        except: db.rollback()
     try:
-        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_checkins_task_date ON checkins(task_id, checkin_date)")
-    except: pass
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_checkins_task_date ON checkins(task_id, checkin_date)"); db.commit()
+    except: db.rollback()
     admin = db.execute("SELECT id FROM users WHERE username='admin'").fetchone()
     if not admin:
         db.execute("INSERT INTO users(username,password,is_admin) VALUES(?,?,1)",
@@ -514,7 +566,8 @@ def settings():
         return jsonify(row_to_dict(row))
     else:
         data = request.json
-        db.execute("""INSERT OR REPLACE INTO settings(user_id,dnd_start,dnd_end,remind_interval,remind_mode)
+        db.execute("DELETE FROM settings WHERE user_id=?", (g.user_id,))
+        db.execute("""INSERT INTO settings(user_id,dnd_start,dnd_end,remind_interval,remind_mode)
         VALUES(?,?,?,?,?)""",
             (g.user_id,data.get('dnd_start','22:00'),data.get('dnd_end','07:00'),
              data.get('remind_interval',15),data.get('remind_mode','notification')))
@@ -816,8 +869,13 @@ def reminder_scheduler():
     last_remind = {}
     while True:
         try:
-            db = sqlite3.connect(DB_PATH)
-            db.row_factory = sqlite3.Row
+            if USE_POSTGRES:
+                raw = psycopg2.connect(os.environ['DATABASE_URL'])
+                db = DBConn(raw)
+            else:
+                raw = sqlite3.connect(DB_PATH)
+                raw.row_factory = sqlite3.Row
+                db = DBConn(raw)
             now = datetime.datetime.now()
             today = now.date().isoformat()
             cur_time = now.strftime('%H:%M')
