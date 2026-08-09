@@ -7,6 +7,12 @@ os.environ.setdefault('TZ', 'Asia/Shanghai')
 try: time.tzset()
 except: pass
 
+CN_TZ = datetime.timezone(datetime.timedelta(hours=8))
+def cn_now():
+    return datetime.datetime.now(CN_TZ).replace(tzinfo=None)
+def cn_today():
+    return cn_now().date()
+
 from werkzeug.security import generate_password_hash, check_password_hash
 from urllib.parse import urlparse
 
@@ -723,7 +729,7 @@ def admin_delete_task(tid):
 # ============ Checkin & Points Settlement ============
 def is_in_dnd(dnd_start, dnd_end, now=None):
     if not dnd_start or not dnd_end: return False
-    now = now or datetime.datetime.now()
+    now = now or cn_now()
     cur = now.hour * 60 + now.minute
     sh, sm = map(int, dnd_start.split(':'))
     eh, em = map(int, dnd_end.split(':'))
@@ -739,7 +745,7 @@ def checkin():
     status = data.get('status','completed')
     actual_duration = int(data.get('actual_duration', data.get('actualDuration', 0)) or 0)
     review_note = data.get('review_note', data.get('reviewNote',''))
-    today = datetime.date.today().isoformat()
+    today = cn_today().isoformat()
     db = get_db()
     task = db.execute("SELECT * FROM tasks WHERE id=? AND user_id=?", (tid,g.user_id)).fetchone()
     if not task: return jsonify({'error':'任务不存在'}), 404
@@ -767,16 +773,16 @@ def checkin():
     cid = old_ck['id'] if old_ck else gen_id()
     if old_ck:
         db.execute("UPDATE checkins SET status=?,actual_duration=?,review_note=?,completed_at=?,points_settled=? WHERE id=?",
-                   (status,actual_duration,review_note,datetime.datetime.now().isoformat(),1 if points_earned>0 or actual_duration>=POINTS_RATIO_MINUTES else 0,cid))
+                   (status,actual_duration,review_note,cn_now().isoformat(),1 if points_earned>0 or actual_duration>=POINTS_RATIO_MINUTES else 0,cid))
     else:
         db.execute("INSERT INTO checkins(id,user_id,task_id,checkin_date,status,actual_duration,review_note,completed_at,points_settled) VALUES(?,?,?,?,?,?,?,?,?)",
-                   (cid,g.user_id,tid,today,status,actual_duration,review_note,datetime.datetime.now().isoformat(),1 if points_earned>0 or actual_duration>=POINTS_RATIO_MINUTES else 0))
+                   (cid,g.user_id,tid,today,status,actual_duration,review_note,cn_now().isoformat(),1 if points_earned>0 or actual_duration>=POINTS_RATIO_MINUTES else 0))
     db.execute("UPDATE tasks SET status=?,actual_duration=?,completed_at=?,review_note=? WHERE id=?",
-               (status,actual_duration,datetime.datetime.now().isoformat(),review_note,tid))
+               (status,actual_duration,cn_now().isoformat(),review_note,tid))
     if status in ('completed','partial'):
         last_date = acc['last_checkin_date']
         if last_date != today:
-            yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+            yesterday = (cn_today() - datetime.timedelta(days=1)).isoformat()
             new_streak = (acc['streak_days'] + 1) if last_date == yesterday else 1
             db.execute("UPDATE point_accounts SET streak_days=?, max_streak_days=MAX(max_streak_days,?), last_checkin_date=? WHERE user_id=?",
                        (new_streak, new_streak, today, g.user_id))
@@ -828,7 +834,7 @@ def expand_cycle_tasks(user_id, db, target_date):
 @token_required
 def today_tasks():
     db = get_db()
-    tasks = expand_cycle_tasks(g.user_id, db, datetime.date.today())
+    tasks = expand_cycle_tasks(g.user_id, db, cn_today())
     done = sum(1 for t in tasks if t['status']=='completed')
     partial = sum(1 for t in tasks if t['status']=='partial')
     return jsonify({'tasks':tasks,'done':done,'partial':partial,'pending':len(tasks)-done-partial,'total':len(tasks)})
@@ -837,7 +843,7 @@ def today_tasks():
 @token_required
 def tomorrow_tasks():
     db = get_db()
-    tasks = expand_cycle_tasks(g.user_id, db, datetime.date.today()+datetime.timedelta(days=1))
+    tasks = expand_cycle_tasks(g.user_id, db, cn_today()+datetime.timedelta(days=1))
     return jsonify({'tasks':tasks,'total':len(tasks)})
 
 @app.route('/api/tasks/defer/<tid>', methods=['POST'])
@@ -846,7 +852,7 @@ def defer_task(tid):
     db = get_db()
     task = db.execute("SELECT * FROM tasks WHERE id=? AND user_id=?", (tid,g.user_id)).fetchone()
     if not task: return jsonify({'error':'任务不存在'}), 404
-    tmr = (datetime.date.today()+datetime.timedelta(days=1)).isoformat()
+    tmr = (cn_today()+datetime.timedelta(days=1)).isoformat()
     db.execute("UPDATE tasks SET target_date=?,status='incomplete',actual_duration=NULL,completed_at=NULL WHERE id=?", (tmr,tid))
     db.commit()
     return jsonify({'msg':'已延期至明天'})
@@ -855,8 +861,8 @@ def defer_task(tid):
 @app.route('/api/history/calendar', methods=['GET'])
 @token_required
 def history_calendar():
-    year = int(request.args.get('year', datetime.date.today().year))
-    month = int(request.args.get('month', datetime.date.today().month))
+    year = int(request.args.get('year', cn_today().year))
+    month = int(request.args.get('month', cn_today().month))
     db = get_db()
     start = datetime.date(year, month, 1)
     end = datetime.date(year, month, 31) if month==12 else datetime.date(year, month+1, 1)-datetime.timedelta(days=1)
@@ -890,7 +896,7 @@ def history_summary():
     if week_start_str:
         ws = datetime.date.fromisoformat(week_start_str)
     else:
-        today = datetime.date.today()
+        today = cn_today()
         ws = today - datetime.timedelta(days=today.weekday())
     we = ws + datetime.timedelta(days=6)
     rows = db.execute("""SELECT c.*, t.name as task_name FROM checkins c
@@ -930,7 +936,7 @@ def history_day(date):
 @token_required
 def goals_progress():
     db = get_db()
-    today = datetime.date.today()
+    today = cn_today()
     ws = today - datetime.timedelta(days=today.weekday())
     we = ws + datetime.timedelta(days=6)
     goals = db.execute("SELECT * FROM goals WHERE user_id=?", (g.user_id,)).fetchall()
@@ -981,7 +987,7 @@ def reminder_scheduler():
                 raw.execute("PRAGMA journal_mode=WAL")
                 raw.execute("PRAGMA busy_timeout=30000")
                 db = DBConn(raw)
-            now = datetime.datetime.now()
+            now = cn_now()
             today = now.date().isoformat()
             cur_time = now.strftime('%H:%M')
             tasks = db.execute("""SELECT t.*, s.dnd_start, s.dnd_end FROM tasks t
@@ -1038,16 +1044,16 @@ def health():
     try:
         db = get_db()
         db.execute("SELECT 1")
-        return jsonify({'status':'ok','time':datetime.datetime.now().isoformat(),'db':'ok'})
+        return jsonify({'status':'ok','time':cn_now().isoformat(),'db':'ok'})
     except:
-        return jsonify({'status':'error','time':datetime.datetime.now().isoformat(),'db':'error'}), 503
+        return jsonify({'status':'error','time':cn_now().isoformat(),'db':'error'}), 503
 
 # ============ Admin Calendar ============
 @app.route('/api/admin/users/<int:uid>/calendar', methods=['GET'])
 @admin_required
 def admin_user_calendar(uid):
-    year = int(request.args.get('year', datetime.date.today().year))
-    month = int(request.args.get('month', datetime.date.today().month))
+    year = int(request.args.get('year', cn_today().year))
+    month = int(request.args.get('month', cn_today().month))
     db = get_db()
     start = datetime.date(year, month, 1)
     end = datetime.date(year, month, 31) if month==12 else datetime.date(year, month+1, 1)-datetime.timedelta(days=1)
