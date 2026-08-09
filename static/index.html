@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>学习计划管理</title>
+<title>小曾每天都在努力学习</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 *{margin:0;padding:0;box-sizing:border-box}
@@ -154,7 +154,7 @@ body{font-family:'Inter',-apple-system,sans-serif;background:var(--bg);color:var
 
 <div class="auth-wrap" id="authWrap">
 <div class="auth-box">
-<h1>📚 学习计划管理</h1>
+<h1>📚 小曾每天都在努力学习</h1>
 <div class="sub">坚持学习，积少成多</div>
 <div class="auth-tabs">
 <button class="auth-tab active" onclick="switchAuthTab('login')">登录</button>
@@ -171,13 +171,13 @@ body{font-family:'Inter',-apple-system,sans-serif;background:var(--bg);color:var
 <button class="auth-btn" onclick="doRegister()">注 册</button>
 </div>
 <div class="auth-err" id="authErr"></div>
-<div class="auth-hint">管理员账号: admin / admin123</div>
+<div class="auth-hint" style="display:none">管理员账号: admin / admin123</div>
 </div>
 </div>
 
 <div id="app">
 <aside class="sidebar">
-<div class="logo">📚 学习计划</div>
+<div class="logo">📚 小曾每天都在努力学习</div>
 <nav id="navMenu"></nav>
 <div class="user-box">
 <div class="name" id="userName"></div>
@@ -245,7 +245,7 @@ requestNotifyPerm();startSSE();
 function buildNav(){
 const nav=document.getElementById('navMenu');
 const items=isAdmin?[
-['admin-users','👥 用户管理'],['admin-shop','🛒 商品管理']
+['admin-users','👥 用户管理'],['admin-tasks','📝 任务管理'],['admin-shop','🛒 商品管理']
 ]:[
 ['today','📋 今日任务'],['tomorrow','📅 明日计划'],['history','🗓️ 历史记录'],['goals','🎯 学习目标'],['points','⭐ 积分中心'],['shop','🎁 积分兑换'],['settings','⚙️ 设置']
 ];
@@ -258,7 +258,7 @@ const main=document.getElementById('mainContent');
 const pages={
 'today':renderToday,'tomorrow':renderTomorrow,'history':renderHistory,'goals':renderGoals,
 'points':renderPoints,'shop':renderShop,'settings':renderSettings,
-'admin-users':renderAdminUsers,'admin-shop':renderAdminShop
+'admin-users':renderAdminUsers,'admin-tasks':renderAdminTasks,'admin-shop':renderAdminShop
 };
 (pages[p]||renderToday)(main);
 }
@@ -490,11 +490,20 @@ main.innerHTML=`<div class="page active"><div class="page-header"><div><h1>设�
 <h4 style="font-size:14px;font-weight:600;margin-bottom:12px">提醒设置</h4>
 <div class="form-group"><label>超时再次提醒间隔（分钟）</label><input type="number" id="remindInterval" value="${s.remind_interval}" min="5" max="120"></div>
 <div class="form-group"><label>提醒模式</label><select id="remindMode"><option value="notification" ${s.remind_mode==='notification'?'selected':''}>系统通知</option><option value="popup" ${s.remind_mode==='popup'?'selected':''}>弹窗置顶</option></select></div></div>
-<button class="btn btn-primary" onclick="saveSettings()">保存设置</button></div>`;
+<button class="btn btn-primary" onclick="saveSettings()">保存设置</button></div>
+<div style="background:var(--surface);border-radius:14px;padding:24px;margin-top:16px;border:1px solid rgba(239,68,68,0.3)">
+<h4 style="font-size:14px;font-weight:600;margin-bottom:12px;color:#ef4444">危险操作</h4>
+<p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">注销账号将删除你的所有数据，包括任务、积分、兑换记录等，此操作不可撤销。</p>
+<button class="btn" style="background:#ef4444;color:#fff" onclick="deleteAccount()">注销账号</button></div>`;
 }catch(e){main.innerHTML='<div class="empty-state"><p>加载失败</p></div>'}
 }
 async function saveSettings(){
 try{await API('/api/settings',{method:'PUT',body:JSON.stringify({dnd_start:document.getElementById('dndStart').value,dnd_end:document.getElementById('dndEnd').value,remind_interval:parseInt(document.getElementById('remindInterval').value)||15,remind_mode:document.getElementById('remindMode').value})});toast('保存成功')}catch(e){toast(e.error||'保存失败')}
+}
+async function deleteAccount(){
+if(!confirm('确定要注销账号吗？所有数据将被永久删除，不可恢复！'))return;
+if(!confirm('再次确认：注销后无法找回任何数据，真的要继续吗？'))return;
+try{await API('/api/account',{method:'DELETE'});toast('账号已注销');setTimeout(()=>logout(),1500)}catch(e){toast(e.error||'注销失败')}
 }
 
 // Task modal
@@ -601,6 +610,55 @@ c.innerHTML=d.points_log.length?d.points_log.map(l=>`<div class="detail-item"><d
 }else{
 c.innerHTML=d.redeem_history.length?d.redeem_history.map(r=>`<div class="detail-item"><div><div class="desc">${esc(r.item_name)}</div><div class="time">${r.time}</div></div><div class="amount minus">-${r.points}</div></div>`).join(''):'<div class="empty-state"><p>无兑换记录</p></div>';
 }
+}
+
+async function renderAdminTasks(main){
+try{
+const [tasks,users]=await Promise.all([API('/api/admin/tasks'),API('/api/admin/users')]);
+window._adminTasks=tasks;window._adminUsers=users;
+main.innerHTML=`<div class="page active"><div class="page-header"><div><h1>任务管理</h1><div class="subtitle">共 ${tasks.length} 个任务，${users.length} 位用户</div></div>
+<button class="btn btn-primary" onclick="openAdminTaskModal()">+ 添加任务</button></div>
+<div class="form-group" style="margin-bottom:16px"><label>筛选用户</label><select id="adminTaskFilter" onchange="renderAdminTaskList()"><option value="">全部用户</option>${users.map(u=>`<option value="${u.id}">${esc(u.username)}</option>`).join('')}</select></div>
+<div id="adminTaskList"></div></div>`;
+renderAdminTaskList();
+}catch(e){main.innerHTML='<div class="empty-state"><p>加载失败</p></div>'}
+}
+function renderAdminTaskList(){
+const tasks=window._adminTasks||[];
+const filter=document.getElementById('adminTaskFilter')?.value||'';
+const filtered=filter?tasks.filter(t=>t.user_id==filter):tasks;
+const el=document.getElementById('adminTaskList');
+el.innerHTML=filtered.length?filtered.map(t=>`<div class="task-item">
+<div class="task-info"><div class="task-name">${esc(t.name)} <span style="font-size:12px;color:var(--text-muted)">[${esc(t.username)}]</span></div>
+<div class="task-meta"><span>${t.date||'循环'}</span><span>${t.duration}min</span><span>${t.status||'未完成'}</span>${t.tag?`<span>${esc(t.tag)}</span>`:''}</div></div>
+<div class="task-actions"><button onclick="openAdminTaskModal('${t.id}')" title="编辑">📝</button><button onclick="deleteAdminTask('${t.id}')" title="删除">🗑️</button></div></div>`).join(''):'<div class="empty-state"><p>无任务</p></div>';
+}
+function openAdminTaskModal(id){
+const tasks=window._adminTasks||[];const users=window._adminUsers||[];
+const t=id?tasks.find(x=>x.id===id):null;
+showModal(t?'编辑任务':'添加任务',`
+<div class="form-group"><label>所属用户</label><select id="atUser"${t?' disabled':''}>${users.map(u=>`<option value="${u.id}" ${t&&t.user_id===u.id?'selected':''}>${esc(u.username)}</option>`).join('')}</select></div>
+<div class="form-group"><label>任务名称</label><input id="atName" value="${t?esc(t.name):''}" placeholder="任务名称"></div>
+<div class="form-row"><div class="form-group"><label>耗时（分钟）</label><input type="number" id="atDur" value="${t?t.duration:30}" min="1"></div>
+<div class="form-group"><label>优先级</label><select id="atPri"><option value="mid" ${t&&t.priority==='mid'?'selected':''}>中</option><option value="high" ${t&&t.priority==='high'?'selected':''}>高</option><option value="low" ${t&&t.priority==='low'?'selected':''}>低</option></select></div></div>
+<div class="form-group"><label>标签</label><input id="atTag" value="${t?esc(t.tag||''):''}"></div>
+<div class="form-group"><label>备注</label><textarea id="atNote">${t?esc(t.note||''):''}</textarea></div>
+<div class="form-group"><label>类型</label><select id="atType"><option value="once" ${t&&t.type==='once'?'selected':''}>单次</option><option value="repeat" ${t&&t.type==='repeat'?'selected':''}>每日重复</option></select></div>
+<div class="form-group"><label>提醒时间</label><input type="time" id="atRemind" value="${t?esc(t.remind_time||''):''}"></div>
+<div class="form-group"><label>日期</label><input type="date" id="atDate" value="${t?esc(t.date||''):dateStr()}"></div>
+<div class="form-actions"><button class="btn btn-secondary" onclick="closeModal()">取消</button><button class="btn btn-primary" onclick="saveAdminTask('${t?t.id:''}')">保存</button></div>`);
+}
+async function saveAdminTask(id){
+const data={user_id:parseInt(document.getElementById('atUser').value),name:document.getElementById('atName').value,duration:parseInt(document.getElementById('atDur').value)||30,priority:document.getElementById('atPri').value,tag:document.getElementById('atTag').value,note:document.getElementById('atNote').value,type:document.getElementById('atType').value,remindTime:document.getElementById('atRemind').value,remindOn:true,date:document.getElementById('atDate').value};
+try{
+if(id)await API('/api/admin/tasks/'+id,{method:'PUT',body:JSON.stringify(data)});
+else await API('/api/admin/tasks',{method:'POST',body:JSON.stringify(data)});
+closeModal();switchPage('admin-tasks')
+}catch(e){toast(e.error||'保存失败')}
+}
+async function deleteAdminTask(id){
+if(!confirm('确定删除此任务？相关打卡积分将被扣回。'))return;
+try{const r=await API('/api/admin/tasks/'+id,{method:'DELETE'});toast(r.rollback>0?`已删除，扣回${r.rollback}积分`:'已删除');switchPage('admin-tasks')}catch(e){toast(e.error||'删除失败')}
 }
 
 async function renderAdminShop(main){

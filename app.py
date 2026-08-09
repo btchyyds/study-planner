@@ -578,6 +578,24 @@ def settings():
         db.commit()
         return jsonify({'msg':'ok'})
 
+@app.route('/api/account', methods=['DELETE'])
+@token_required
+def delete_account():
+    if g.is_admin:
+        return jsonify({'error':'管理员账号不能注销'}), 400
+    db = get_db()
+    uid = g.user_id
+    db.execute("DELETE FROM checkins WHERE user_id=?", (uid,))
+    db.execute("DELETE FROM tasks WHERE user_id=?", (uid,))
+    db.execute("DELETE FROM point_accounts WHERE user_id=?", (uid,))
+    db.execute("DELETE FROM points_log WHERE user_id=?", (uid,))
+    db.execute("DELETE FROM redeem_history WHERE user_id=?", (uid,))
+    db.execute("DELETE FROM goals WHERE user_id=?", (uid,))
+    db.execute("DELETE FROM settings WHERE user_id=?", (uid,))
+    db.execute("DELETE FROM users WHERE id=?", (uid,))
+    db.commit()
+    return jsonify({'msg':'账号已注销'})
+
 # ============ Admin ============
 @app.route('/api/admin/users', methods=['GET'])
 @admin_required
@@ -620,6 +638,83 @@ def admin_shop_all():
     db = get_db()
     rows = db.execute("SELECT * FROM shop_items ORDER BY created_at DESC").fetchall()
     return jsonify([row_to_dict(r) for r in rows])
+
+@app.route('/api/admin/tasks', methods=['GET'])
+@admin_required
+def admin_tasks_all():
+    db = get_db()
+    rows = db.execute("""SELECT t.*, u.username FROM tasks t
+        JOIN users u ON t.user_id=u.id ORDER BY t.created_at DESC""").fetchall()
+    return jsonify([dict(row_to_dict(r), username=r['username']) for r in rows])
+
+@app.route('/api/admin/tasks', methods=['POST'])
+@admin_required
+def admin_add_task():
+    data = request.json
+    uid = data.get('user_id')
+    db = get_db()
+    if not db.execute("SELECT id FROM users WHERE id=? AND is_admin=0", (uid,)).fetchone():
+        return jsonify({'error':'用户不存在或不是普通用户'}), 400
+    tid = gen_id()
+    db.execute("""INSERT INTO tasks(id,user_id,name,duration,priority,tag,note,type,repeat_rule,repeat_paused,custom_days,remind_time,remind_on,date,status)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (tid,uid,data.get('name'),data.get('duration',30),data.get('priority','mid'),
+         data.get('tag'),data.get('note'),data.get('type','once'),data.get('repeatRule','daily'),
+         1 if data.get('repeatPaused') else 0,json.dumps(data.get('customDays',[])),
+         data.get('remindTime'),1 if data.get('remindOn',True) else 0,data.get('date'),'incomplete'))
+    db.commit()
+    return jsonify({'id':tid})
+
+@app.route('/api/admin/tasks/<tid>', methods=['PUT'])
+@admin_required
+def admin_update_task(tid):
+    data = request.json
+    db = get_db()
+    task = db.execute("SELECT * FROM tasks WHERE id=?", (tid,)).fetchone()
+    if not task: return jsonify({'error':'任务不存在'}), 404
+    old_dur = task['actual_duration'] or 0
+    fields = ['name','duration','priority','tag','note','type','repeat_rule','repeat_paused','remind_time','remind_on','date','status','actual_duration','completed_at','review_note']
+    updates = []
+    vals = []
+    mapping = {'repeatRule':'repeat_rule','repeatPaused':'repeat_paused','remindTime':'remind_time','remindOn':'remind_on','actualDuration':'actual_duration','completedAt':'completed_at','reviewNote':'review_note'}
+    for k,v in data.items():
+        fk = mapping.get(k,k)
+        if fk in fields:
+            if fk in ('repeat_paused','remind_on'):
+                v = 1 if v else 0
+            if k == 'customDays':
+                fk = 'custom_days'; v = json.dumps(v)
+            updates.append(f"{fk}=?")
+            vals.append(v)
+    if updates:
+        vals.append(tid)
+        db.execute(f"UPDATE tasks SET {','.join(updates)} WHERE id=?", vals)
+        db.commit()
+    new_dur = data.get('actualDuration', old_dur)
+    if 'actualDuration' in data and new_dur != old_dur:
+        recalc_points(task['user_id'], task['name'], old_dur, new_dur, db)
+        db.commit()
+    return jsonify({'msg':'ok'})
+
+@app.route('/api/admin/tasks/<tid>', methods=['DELETE'])
+@admin_required
+def admin_delete_task(tid):
+    db = get_db()
+    task = db.execute("SELECT * FROM tasks WHERE id=?", (tid,)).fetchone()
+    if not task: return jsonify({'error':'任务不存在'}), 404
+    uid = task['user_id']
+    ck = db.execute("SELECT * FROM checkins WHERE task_id=? AND points_settled=1", (tid,)).fetchall()
+    rollback = 0
+    for c in ck:
+        pts = c['actual_duration'] // 60
+        rollback += pts
+        db.execute("UPDATE point_accounts SET total_earned=total_earned-? WHERE user_id=?", (pts, uid))
+        db.execute("INSERT INTO points_log(id,user_id,type,amount,desc,source_task_id,source_duration) VALUES(?,?,?,?,?,?,?)",
+            (gen_id(),uid,'spend',pts,'管理员删除任务扣回积分',tid,c['actual_duration']))
+    db.execute("DELETE FROM checkins WHERE task_id=?", (tid,))
+    db.execute("DELETE FROM tasks WHERE id=?", (tid,))
+    db.commit()
+    return jsonify({'msg':'ok','rollback':rollback})
 
 # ============ Checkin & Points Settlement ============
 def is_in_dnd(dnd_start, dnd_end, now=None):
